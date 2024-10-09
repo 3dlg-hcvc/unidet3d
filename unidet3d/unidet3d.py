@@ -6,16 +6,67 @@ import MinkowskiEngine as ME
 from torch import Tensor
 
 from mmcv.ops import nms3d, nms3d_normal
-from mmengine.structures import InstanceData
 
 from mmdet3d.registry import MODELS
 from mmdet3d.structures import DepthInstance3DBoxes
 from mmdet3d.models import Base3DDetector
 from mmdet3d.models.layers.box3d_nms import aligned_3d_nms
 from mmdet3d.structures import rotation_3d_in_axis
-
+import numpy as np
 from .criterion import _bbox_to_loss
 from .structures import InstanceData_
+
+
+def sparse_collate(coords, feats, dtype=torch.int32, device=None):
+    r"""Create input arguments for a sparse tensor `the documentation
+    <https://nvidia.github.io/MinkowskiEngine/sparse_tensor.html>`_.
+
+    Convert a set of coordinates and features into the batch coordinates and
+    batch features.
+
+    Args:
+        :attr:`coords` (set of `torch.Tensor` or `numpy.ndarray`): a set of coordinates.
+
+        :attr:`feats` (set of `torch.Tensor` or `numpy.ndarray`): a set of features.
+
+        :attr:`labels` (set of `torch.Tensor` or `numpy.ndarray`): a set of labels
+        associated to the inputs.
+
+    """
+    feats_batch, labels_batch = [], []
+    D = np.unique(np.array([cs.shape[1] for cs in coords]))
+    D = D[0]
+    if device is None:
+        if isinstance(coords[0], torch.Tensor):
+            device = coords[0].device
+        else:
+            device = "cpu"
+
+    N = np.array([len(cs) for cs in coords]).sum()
+
+    batch_id = 0
+    s = 0  # start index
+    bcoords = torch.zeros((N, D + 1), dtype=dtype, device=device)  # uninitialized
+    for coord, feat in zip(coords, feats):
+        if dtype == torch.int32 and coord.dtype in [torch.float32, torch.float64]:
+            coord = coord.floor()
+
+        cn = coord.shape[0]
+        # Batched coords
+        bcoords[s : s + cn, 1:] = coord
+        bcoords[s : s + cn, 0] = batch_id
+
+        # Features
+        feats_batch.append(feat)
+
+        # Post processing steps
+        batch_id += 1
+        s += cn
+
+    # Concatenate all lists
+    feats_batch = torch.cat(feats_batch, 0)
+    return bcoords, feats_batch
+
 
 @MODELS.register_module()
 class UniDet3D(Base3DDetector):
@@ -154,19 +205,19 @@ class UniDet3D(Base3DDetector):
                 - spatial_shape (Tensor): The spatial shape of the sparse tensor,
                 clipped to the minimum spatial shape.
         """
+        assert elastic_points is not None
+
         if elastic_points is None:
-            coordinates, features = ME.utils.batch_sparse_collate(
-                [((p[:, :3] - p[:, :3].min(0)[0]) / self.voxel_size,
-                  torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0))))
-                 for p in points])
+            coordinates, features = sparse_collate(
+                *list(zip(*[((p[:, :3] - p[:, :3].min(0)[0]) / self.voxel_size, torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0)))) for p in points]))
+            )
+
         else:
-            coordinates, features = ME.utils.batch_sparse_collate(
-                [((el_p - el_p.min(0)[0]),
-                  torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0))))
-                 for el_p, p in zip(elastic_points, points)])
-        
-        spatial_shape = torch.clip(
-            coordinates.max(0)[0][1:] + 1, self.min_spatial_shape)
+            coordinates, features = sparse_collate(
+                *list(zip(*[((el_p - el_p.min(0)[0]),torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0)))) for el_p, p in zip(elastic_points, points)]))
+            )
+
+        spatial_shape = torch.clip(coordinates.max(0)[0][1:] + 1, self.min_spatial_shape)
         field = ME.TensorField(features=features, coordinates=coordinates)
         tensor = field.sparse()
         coordinates = tensor.coordinates
@@ -346,15 +397,12 @@ class UniDet3D(Base3DDetector):
             sp_gt_instances.append(batch_data_samples[i].gt_instances_3d)
             sp_pts_masks.append(gt_pts_seg.sp_pts_mask)
 
-        coordinates, features, inverse_mapping, spatial_shape = self.collate(
-            batch_inputs_dict['points'],
-            batch_inputs_dict.get('elastic_coords', None))
+        coordinates, features, inverse_mapping, spatial_shape = self.collate(batch_inputs_dict['points'], batch_inputs_dict.get('elastic_coords', None))
 
-        x = spconv.SparseConvTensor(
-            features, coordinates, spatial_shape, len(batch_data_samples))
+        x = spconv.SparseConvTensor(features, coordinates, spatial_shape, len(batch_data_samples))
+
         sp_pts_masks = torch.hstack(sp_pts_masks)
-        x = self.extract_feat(
-            x, sp_pts_masks, inverse_mapping, batch_offsets)
+        x = self.extract_feat(x, sp_pts_masks, inverse_mapping, batch_offsets)
 
         queries, sp_centers_queries, sp_gt_instances = \
                     self._select_queries(x, sp_gt_instances)
