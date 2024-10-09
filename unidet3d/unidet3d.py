@@ -53,8 +53,8 @@ def sparse_collate(coords, feats, dtype=torch.int32, device=None):
 
         cn = coord.shape[0]
         # Batched coords
-        bcoords[s : s + cn, 1:] = coord
-        bcoords[s : s + cn, 0] = batch_id
+        bcoords[s: s + cn, 1:] = coord
+        bcoords[s: s + cn, 0] = batch_id
 
         # Features
         feats_batch.append(feat)
@@ -79,14 +79,8 @@ class UniDet3D(Base3DDetector):
         min_spatial_shape (int): Minimal shape for spconv tensor.
         query_thr (float): We select min(query_thr, n_queries) queries
             for training and testing.
-        use_superpoints (bool): Flag to indicate whether to use superpoints
-            for improved detection.
         bbox_by_mask (bool): Whether to derive bounding boxes from masks.
-        target_by_distance (bool): Whether to use targets based on distance 
-            to bbox center.
         fast_nms (bool): Flag for using fast Non-Maximum Suppression.
-        use_sync_bn (bool, optional): Flag to use synchronized 
-            batch normalization. Defaults to True.
         backbone (ConfigDict, optional): Config dict of the backbone. 
             Defaults to None.
         decoder (ConfigDict, optional): Config dict of the decoder. 
@@ -107,17 +101,15 @@ class UniDet3D(Base3DDetector):
         init_cfg (dict or ConfigDict, optional): The config to control the 
             initialization. Defaults to None.
     """
+
     def __init__(self,
                  in_channels,
                  num_channels,
                  voxel_size,
                  min_spatial_shape,
                  query_thr,
-                 use_superpoints,
-                 bbox_by_mask, 
-                 target_by_distance,
+                 bbox_by_mask,
                  fast_nms,
-                 use_sync_bn=True,
                  backbone=None,
                  decoder=None,
                  criterion=None,
@@ -125,8 +117,7 @@ class UniDet3D(Base3DDetector):
                  test_cfg=None,
                  data_preprocessor=None,
                  init_cfg=None):
-        super(Base3DDetector, self).__init__(
-            data_preprocessor=data_preprocessor, init_cfg=init_cfg)
+        super(Base3DDetector, self).__init__(data_preprocessor=data_preprocessor, init_cfg=init_cfg)
         if backbone is not None:
             self.unet = MODELS.build(backbone)
         self.decoder = MODELS.build(decoder)
@@ -134,15 +125,12 @@ class UniDet3D(Base3DDetector):
         self.voxel_size = voxel_size
         self.min_spatial_shape = min_spatial_shape
         self.query_thr = query_thr
-        self.use_superpoints = use_superpoints
         self.bbox_by_mask = bbox_by_mask
-        self.target_by_distance = target_by_distance 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
-        self.use_sync_bn = use_sync_bn
         self.fast_nms = fast_nms
         self._init_layers(in_channels, num_channels)
-    
+
     def _init_layers(self, in_channels, num_channels):
         self.input_conv = spconv.SparseSequential(
             spconv.SubMConv3d(
@@ -152,14 +140,11 @@ class UniDet3D(Base3DDetector):
                 padding=1,
                 bias=False,
                 indice_key='subm1'))
-        if self.use_sync_bn:
-            self.output_layer = spconv.SparseSequential(
-                torch.nn.SyncBatchNorm(num_channels, eps=1e-4, momentum=0.1),
-                torch.nn.ReLU(inplace=True))
-        else:
-            self.output_layer = spconv.SparseSequential(
-                torch.nn.BatchNorm1d(num_channels, eps=1e-4, momentum=0.1),
-                torch.nn.ReLU(inplace=True))
+
+        self.output_layer = spconv.SparseSequential(
+            torch.nn.BatchNorm1d(num_channels, eps=1e-4, momentum=0.1),
+            torch.nn.ReLU(inplace=True)
+        )
 
     def extract_feat(self, x, superpoints, inverse_mapping, batch_offsets):
         """Extract features from sparse tensor.
@@ -208,12 +193,13 @@ class UniDet3D(Base3DDetector):
 
         if elastic_points is None:
             coordinates, features = sparse_collate(
-                *list(zip(*[((p[:, :3] - p[:, :3].min(0)[0]) / self.voxel_size, torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0)))) for p in points]))
+                *list(zip(*[((p[:, :3] - p[:, :3].min(0)[0]) / self.voxel_size,
+                             torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0)))) for p in points]))
             )
 
         else:
             coordinates, features = sparse_collate(
-                *list(zip(*[((el_p - el_p.min(0)[0]),torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0)))) for el_p, p in zip(elastic_points, points)]))
+                *list(zip(*[((el_p - el_p.min(0)[0]), torch.hstack((p[:, 3:], p[:, :3] - p[:, :3].mean(0)))) for el_p, p in zip(elastic_points, points)]))
             )
 
         spatial_shape = torch.clip(coordinates.max(0)[0][1:] + 1, self.min_spatial_shape)
@@ -297,14 +283,13 @@ class UniDet3D(Base3DDetector):
             boxes.append(box)
         if len(boxes) == 0:
             bboxes = DepthInstance3DBoxes(
-                masks.new_zeros(0, 6), with_yaw=False, 
-                box_dim=6, origin=(0.5, 0.5, 0.5))
+                masks.new_zeros(0, 6), with_yaw=False, box_dim=6, origin=(0.5, 0.5, 0.5)
+            )
         else:
             boxes = torch.stack(boxes)
-            bboxes = DepthInstance3DBoxes(
-                boxes, with_yaw=False, box_dim=6, origin=(0.5, 0.5, 0.5))
+            bboxes = DepthInstance3DBoxes(boxes, with_yaw=False, box_dim=6, origin=(0.5, 0.5, 0.5))
         return bboxes
-    
+
     def get_gt_inst_masks(self, masks_src):
         """Create ground truth instance masks.
         
@@ -341,53 +326,20 @@ class UniDet3D(Base3DDetector):
         sp_gt_instances = []
         sp_pts_masks = []
         sp_centers = []
-        
-        if batch_inputs_dict.get('elastic_coords') is not None:
-            points = [(point - point.min(0)[0]) * self.voxel_size for point in \
-                batch_inputs_dict['elastic_coords']]
-            shifts = [point.min(0)[0] * self.voxel_size for point in \
-                batch_inputs_dict['elastic_coords']]
-        else:
-            points = [point[:, :3] - point[:, :3].min(0)[0] for point in \
-                batch_inputs_dict['points']]
-            shifts = [point[:, :3].min(0)[0] for point in \
-                batch_inputs_dict['points']]
 
-        datasets_names = []
+        if batch_inputs_dict.get('elastic_coords') is not None:
+            points = [(point - point.min(0)[0]) * self.voxel_size for point in batch_inputs_dict['elastic_coords']]
+        else:
+            points = [point[:, :3] - point[:, :3].min(0)[0] for point in batch_inputs_dict['points']]
+
         for i in range(len(batch_data_samples)):
-            datasets_names.append(self.get_dataset(
-                            batch_data_samples[i].lidar_path))
             gt_pts_seg = batch_data_samples[i].gt_pts_seg
-            dataset = self.decoder.datasets.index(datasets_names[i])
-            if self.bbox_by_mask[dataset]:
+            if self.bbox_by_mask:
                 gt_masks = self.get_gt_inst_masks(gt_pts_seg.pts_instance_mask)
-                batch_data_samples[i].gt_instances_3d.bboxes_3d = \
-                                            self.get_bboxes_by_masks(gt_masks.T,
-                                                                    points[i])
-            else:
-                center = batch_data_samples[i].gt_instances_3d.\
-                                    bboxes_3d.gravity_center - \
-                                    shifts[i]
-                bboxes = torch.cat((center,
-                                    batch_data_samples[i].gt_instances_3d.\
-                                    bboxes_3d.tensor[:, 3:]),
-                                    dim=1)
-                batch_data_samples[i].gt_instances_3d.bboxes_3d = \
-                    DepthInstance3DBoxes(
-                        bboxes, 
-                        with_yaw=batch_data_samples[i].gt_instances_3d.\
-                                                    bboxes_3d.with_yaw, 
-                        box_dim=bboxes.shape[1], origin=(0.5, 0.5, 0.5))
-            
-            batch_data_samples[i].gt_instances_3d.sp_centers = \
-                scatter_mean(points[i], gt_pts_seg.sp_pts_mask, dim=0)
-            if self.target_by_distance[dataset]:
-                batch_data_samples[i].gt_instances_3d.sp_masks = \
-                    self.get_targets(batch_data_samples[i].gt_instances_3d.\
-                                        sp_centers,
-                                     batch_data_samples[i].gt_instances_3d.\
-                                        bboxes_3d,
-                                     self.train_cfg.topk)
+                batch_data_samples[i].gt_instances_3d.bboxes_3d = self.get_bboxes_by_masks(gt_masks.T, points[i])
+
+            batch_data_samples[i].gt_instances_3d.sp_centers = scatter_mean(points[i], gt_pts_seg.sp_pts_mask, dim=0)
+
             sp_centers.append(batch_data_samples[i].gt_instances_3d.sp_centers)
             gt_pts_seg.sp_pts_mask += superpoint_bias
             superpoint_bias = gt_pts_seg.sp_pts_mask.max().item() + 1
@@ -396,24 +348,24 @@ class UniDet3D(Base3DDetector):
             sp_gt_instances.append(batch_data_samples[i].gt_instances_3d)
             sp_pts_masks.append(gt_pts_seg.sp_pts_mask)
 
-        coordinates, features, inverse_mapping, spatial_shape = self.collate(batch_inputs_dict['points'], batch_inputs_dict.get('elastic_coords', None))
+        coordinates, features, inverse_mapping, spatial_shape = self.collate(
+            batch_inputs_dict['points'], batch_inputs_dict.get('elastic_coords', None)
+        )
 
         x = spconv.SparseConvTensor(features, coordinates, spatial_shape, len(batch_data_samples))
 
         sp_pts_masks = torch.hstack(sp_pts_masks)
         x = self.extract_feat(x, sp_pts_masks, inverse_mapping, batch_offsets)
 
-        queries, sp_centers_queries, sp_gt_instances = \
-                    self._select_queries(x, sp_gt_instances)
-        x = self.decoder(queries, sp_centers_queries, datasets_names)
-        loss = self.criterion(x, sp_gt_instances, datasets_names)
+        queries, sp_centers_queries, sp_gt_instances = self._select_queries(x, sp_gt_instances)
+
+
+
+        x = self.decoder(queries, sp_centers_queries)
+        loss = self.criterion(x, sp_gt_instances)
 
         return loss
 
-    def get_dataset(self, lidar_path):
-        for dataset in self.decoder.datasets:
-            if dataset in lidar_path.split('/'):
-                return dataset
 
     def get_targets(self, points, gt_bboxes, topk):
         """Compute targets for final locations for a single scene.
@@ -431,7 +383,7 @@ class UniDet3D(Base3DDetector):
         float_max = points[0].new_tensor(1e8)
         n_points = len(points)
         n_boxes = len(gt_bboxes)
-        boxes = torch.cat((gt_bboxes.gravity_center, 
+        boxes = torch.cat((gt_bboxes.gravity_center,
                            gt_bboxes.tensor[:, 3:]),
                           dim=1)
         boxes = boxes.expand(n_points, n_boxes, boxes.shape[1])
@@ -447,7 +399,7 @@ class UniDet3D(Base3DDetector):
             dim=0).values[-1]
         topk_condition = center_distances < topk_distances.unsqueeze(0)
         center_distances = torch.where(topk_condition, center_distances,
-                                        float_max)
+                                       float_max)
         min_values, min_ids = center_distances.min(dim=1)
         min_inds = torch.where(min_values < float_max, min_ids, n_boxes)
         min_dist_condition = torch.nn.functional.one_hot(
@@ -481,46 +433,37 @@ class UniDet3D(Base3DDetector):
         superpoint_bias = 0
         sp_pts_masks = []
         sp_centers = []
-        datasets_names = []
         sp_pts_masks_src = []
         points_src = []
         for i in range(len(batch_data_samples)):
-            datasets_names.append(self.get_dataset(
-                            batch_data_samples[i].lidar_path))
             gt_pts_seg = batch_data_samples[i].gt_pts_seg
             points = batch_inputs_dict['points'][i][:, :3]
             points_src.append(points)
-            sp_centers.append(scatter_mean(points, 
-                                           gt_pts_seg.sp_pts_mask, dim=0))
+            sp_centers.append(scatter_mean(points, gt_pts_seg.sp_pts_mask, dim=0))
             sp_pts_masks_src.append(gt_pts_seg.sp_pts_mask)
             gt_pts_seg.sp_pts_mask += superpoint_bias
             superpoint_bias = gt_pts_seg.sp_pts_mask.max().item() + 1
             batch_offsets.append(superpoint_bias)
             sp_pts_masks.append(gt_pts_seg.sp_pts_mask)
 
-        coordinates, features, inverse_mapping, spatial_shape = self.collate(
-            batch_inputs_dict['points'])
-        x = spconv.SparseConvTensor(
-            features, coordinates, spatial_shape, len(batch_data_samples))
+        coordinates, features, inverse_mapping, spatial_shape = self.collate(batch_inputs_dict['points'])
+        x = spconv.SparseConvTensor(features, coordinates, spatial_shape, len(batch_data_samples))
         sp_pts_masks = torch.hstack(sp_pts_masks)
-        x = self.extract_feat(
-            x, sp_pts_masks, inverse_mapping, batch_offsets)
+        x = self.extract_feat(x, sp_pts_masks, inverse_mapping, batch_offsets)
 
-        x = self.decoder(x, sp_centers, datasets_names)
+        x = self.decoder(x, sp_centers)
 
-        results_list = self.predict_by_feat(x, sp_pts_masks_src, 
-                                            points_src, datasets_names)
-        
+        results_list = self.predict_by_feat(x, sp_pts_masks_src, points_src)
+
         for i, data_sample in enumerate(batch_data_samples):
             bboxes, labels, scores = results_list[i]
             data_sample.pred_instances_3d = InstanceData_(
                 bboxes_3d=bboxes, scores_3d=scores, labels_3d=labels,
                 points=batch_inputs_dict['points'][0])
-        
+
         return batch_data_samples
 
-    def predict_by_feat(self, out, sp_pts_masks, points, 
-                        datasets_names):
+    def predict_by_feat(self, out, sp_pts_masks, points):
         """Predict bounding boxes and labels from model outputs.
 
         Args:
@@ -534,8 +477,6 @@ class UniDet3D(Base3DDetector):
             points (List[Tensor]): A list of point tensors containing 
                 the 3D coordinates of the points being evaluated.
 
-            datasets_names (List[str]): A list of dataset names 
-                corresponding to the input samples.
 
         Returns:
             List[Tuple[DepthInstance3DBoxes, Tensor, Tensor]]: A list containing 
@@ -544,47 +485,25 @@ class UniDet3D(Base3DDetector):
         """
         cls_preds = out['cls_preds'][0]
         pred_bboxes = out['bboxes'][0]
-        sp_pts_mask = sp_pts_masks[0] 
+        sp_pts_mask = sp_pts_masks[0]
         point = points[0]
-        dataset_name = datasets_names[0]
-    
+
         scores = F.softmax(cls_preds, dim=-1)[:, :-1]
         num_classes = scores.shape[1]
-        labels = torch.arange(
-            num_classes,
-            device=scores.device).unsqueeze(0).repeat(
-                len(cls_preds), 1).flatten(0, 1)
-        scores, topk_idx = scores.flatten(0, 1).topk(
-            self.test_cfg.topk_insts, sorted=True)
+        labels = torch.arange(num_classes, device=scores.device).unsqueeze(0).repeat(len(cls_preds), 1).flatten(0, 1)
+        scores, topk_idx = scores.flatten(0, 1).topk(self.test_cfg.topk_insts, sorted=True)
         labels = labels[topk_idx]
 
         topk_idx = torch.div(topk_idx, num_classes, rounding_mode='floor')
         pred_bboxes = pred_bboxes[topk_idx]
 
-        fast_nms = self.fast_nms[self.decoder.\
-                                        datasets.index(dataset_name)]
-        iou_thr = self.test_cfg.iou_thr[self.decoder.\
-                                        datasets.index(dataset_name)]
-        nms_bboxes, nms_scores, nms_labels = \
-                self._single_scene_multiclass_nms(pred_bboxes,
-                                                  scores, 
-                                                  labels,
-                                                  fast_nms, 
-                                                  iou_thr)
-        if not self.use_superpoints[
-            self.decoder.datasets.index(dataset_name)]:
-            return [(DepthInstance3DBoxes(
-                nms_bboxes, 
-                with_yaw=nms_bboxes.shape[1] == 7, 
-                box_dim=nms_bboxes.shape[1], 
-                origin=(0.5, 0.5, 0.5)),
-                nms_labels, nms_scores)]
-        else:
-            return self.trim_bboxes_by_superpoints(sp_pts_mask, point, 
-                                                   nms_bboxes, nms_labels,
-                                                   nms_scores)
+        fast_nms = self.fast_nms
+        iou_thr = self.test_cfg.iou_thr
+        nms_bboxes, nms_scores, nms_labels = self._single_scene_multiclass_nms(pred_bboxes, scores, labels, fast_nms, iou_thr)
 
-    def trim_bboxes_by_superpoints(self, sp_pts_mask, point, 
+        return self.trim_bboxes_by_superpoints(sp_pts_mask, point, nms_bboxes, nms_labels, nms_scores)
+
+    def trim_bboxes_by_superpoints(self, sp_pts_mask, point,
                                    bboxes, labels, scores):
         """Trim bounding boxes based on superpoint masks.
 
@@ -612,14 +531,14 @@ class UniDet3D(Base3DDetector):
             bboxes = torch.cat(
                 (bboxes, torch.zeros_like(bboxes[:, :1])),
                 dim=1)
-        bboxes = bboxes.unsqueeze(0).expand(n_points, n_boxes, 
+        bboxes = bboxes.unsqueeze(0).expand(n_points, n_boxes,
                                             bboxes.shape[1])
         face_distances = get_face_distances(point, bboxes)
 
         inside_bbox = face_distances.min(dim=-1).values > 0
         inside_bbox = inside_bbox.T
-        sp_inside = scatter_mean(inside_bbox.float(), 
-                                        sp_pts_mask, dim=-1)
+        sp_inside = scatter_mean(inside_bbox.float(),
+                                 sp_pts_mask, dim=-1)
         sp_del = sp_inside < self.test_cfg.low_sp_thr
         inside_bbox[sp_del[:, sp_pts_mask]] = False
 
@@ -635,11 +554,11 @@ class UniDet3D(Base3DDetector):
         bboxes_sizes = bboxes_max - bboxes_min
         bboxes_centers = (bboxes_max + bboxes_min) / 2
         bboxes = torch.hstack((bboxes_centers, bboxes_sizes))
-        bboxes = DepthInstance3DBoxes(bboxes, with_yaw=False, 
-                                      box_dim=6, origin=(0.5, 0.5, 0.5))       
+        bboxes = DepthInstance3DBoxes(bboxes, with_yaw=False,
+                                      box_dim=6, origin=(0.5, 0.5, 0.5))
         return [(bboxes, labels, scores)]
 
-    def _single_scene_multiclass_nms(self, bboxes, scores, 
+    def _single_scene_multiclass_nms(self, bboxes, scores,
                                      labels, fast_nms, iou_thr):
         """Multi-class nms for a single scene.
 
@@ -678,8 +597,8 @@ class UniDet3D(Base3DDetector):
                         dim=1)
                     nms_ids = nms3d_normal(class_bboxes, class_scores, iou_thr)
                 else:
-                    nms_ids = aligned_3d_nms(_bbox_to_loss(class_bboxes), 
-                                class_scores, class_labels, iou_thr)
+                    nms_ids = aligned_3d_nms(_bbox_to_loss(class_bboxes),
+                                             class_scores, class_labels, iou_thr)
 
             nms_bboxes.append(class_bboxes[nms_ids])
             nms_scores.append(class_scores[nms_ids])
@@ -691,10 +610,11 @@ class UniDet3D(Base3DDetector):
             nms_labels = torch.cat(nms_labels, dim=0)
         else:
             nms_bboxes = bboxes.new_zeros((0, bboxes.shape[1]))
-            nms_scores = bboxes.new_zeros((0, ))
-            nms_labels = bboxes.new_zeros((0, ))
+            nms_scores = bboxes.new_zeros((0,))
+            nms_labels = bboxes.new_zeros((0,))
 
         return nms_bboxes, nms_scores, nms_labels
+
 
 def get_face_distances(points: Tensor, boxes: Tensor) -> Tensor:
     """Calculate distances from point to box faces.
@@ -709,7 +629,7 @@ def get_face_distances(points: Tensor, boxes: Tensor) -> Tensor:
     """
     shift = torch.stack(
         (points[..., 0] - boxes[..., 0], points[..., 1] - boxes[..., 1],
-            points[..., 2] - boxes[..., 2]),
+         points[..., 2] - boxes[..., 2]),
         dim=-1).permute(1, 0, 2)
     shift = rotation_3d_in_axis(
         shift, -boxes[0, :, 6], axis=2).permute(1, 0, 2)
@@ -721,4 +641,4 @@ def get_face_distances(points: Tensor, boxes: Tensor) -> Tensor:
     dz_min = centers[..., 2] - boxes[..., 2] + boxes[..., 5] / 2
     dz_max = boxes[..., 2] + boxes[..., 5] / 2 - centers[..., 2]
     return torch.stack((dx_min, dx_max, dy_min, dy_max, dz_min, dz_max),
-                        dim=-1)
+                       dim=-1)

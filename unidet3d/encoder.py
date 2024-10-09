@@ -5,6 +5,7 @@ import itertools
 from mmengine.model import BaseModule
 from mmdet3d.registry import MODELS
 
+
 class SelfAttentionLayer(BaseModule):
     """Self attention layer.
 
@@ -16,8 +17,7 @@ class SelfAttentionLayer(BaseModule):
 
     def __init__(self, d_model, num_heads, dropout):
         super().__init__()
-        self.attn = nn.MultiheadAttention(
-            d_model, num_heads, dropout=dropout, batch_first=True)
+        self.attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
         self.norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
 
@@ -39,6 +39,7 @@ class SelfAttentionLayer(BaseModule):
             z = self.norm(z)
             out.append(z)
         return out
+
 
 class FFN(BaseModule):
     """Feed forward network.
@@ -79,6 +80,7 @@ class FFN(BaseModule):
             out.append(z)
         return out
 
+
 class PredBBox(nn.Module):
     """Prediction module for bounding boxes.
 
@@ -90,6 +92,7 @@ class PredBBox(nn.Module):
             initializes the linear layer weights using 
             a normal distribution. Defaults to False.
     """
+
     def __init__(self, d_model, n_bbox_outs, bbox_init_normal=False):
         super(PredBBox, self).__init__()
         self.linear = nn.Linear(d_model, n_bbox_outs)
@@ -107,8 +110,8 @@ class PredBBox(nn.Module):
                 containing the predicted bounding boxes.
         """
         x = self.linear(x)
-        return torch.hstack((torch.exp(x[:, :6]), 
-                             x[:, 6:]))
+        return torch.hstack((torch.exp(x[:, :6]), x[:, 6:]))
+
 
 @MODELS.register_module()
 class UniDet3DEncoder(BaseModule):
@@ -125,19 +128,18 @@ class UniDet3DEncoder(BaseModule):
         dropout (float): Dropout rate for transformer layer.
         activation_fn (str): 'relu' of 'gelu'.
         datasets (List[str]): List of dataset names.
-        angles (List[Bool]): Whether to use angle prediction.
     """
 
-    def __init__(self, num_layers, datasets_classes, in_channels, 
+    def __init__(self, num_layers, datasets_classes, in_channels,
                  d_model, num_heads, hidden_dim, dropout, activation_fn,
-                 datasets, angles, **kwargs):
+                 datasets, **kwargs):
         super().__init__()
         self.num_layers = num_layers
         self.datasets = datasets
-        self.angles = angles 
         self.input_proj = nn.Sequential(
             nn.Linear(in_channels, d_model), nn.ReLU(),
-            nn.Linear(d_model, d_model))
+            nn.Linear(d_model, d_model)
+        )
         self.self_attn_layers = nn.ModuleList([])
         self.ffn_layers = nn.ModuleList([])
         for i in range(num_layers):
@@ -149,10 +151,12 @@ class UniDet3DEncoder(BaseModule):
         self.outs_cls = nn.ModuleList([])
 
         unique_cls = sorted(list(set(itertools.chain.from_iterable(
-                            datasets_classes)))) + ['no_obj']
+            datasets_classes)))) + ['no_obj']
         self.outs_cls = nn.Sequential(
-                                nn.Linear(d_model, d_model), nn.ReLU(),
-                                nn.Linear(d_model, len(unique_cls)))
+            nn.Linear(d_model, d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, len(unique_cls))
+        )
         self.datasets_cls_idxs = []
         for dataset_classes in datasets_classes:
             dataset_cls_idxs = []
@@ -162,7 +166,7 @@ class UniDet3DEncoder(BaseModule):
 
         self.out_bboxes = PredBBox(d_model, 8)
 
-    def _forward_head(self, feats, sp_centers, datasets_names):
+    def _forward_head(self, feats, sp_centers):
         """Prediction head forward.
 
         Args:
@@ -172,8 +176,6 @@ class UniDet3DEncoder(BaseModule):
                 each of shape (n_bboxes_i, 3) representing 
                 the spatial centers for the predicted 
                 bounding boxes.
-            datasets_names (List[str]): A list of dataset names 
-                corresponding to each input feature tensor.
 
         Returns:
             Tuple[List[Tensor], List[Tensor]]:
@@ -188,19 +190,17 @@ class UniDet3DEncoder(BaseModule):
         cls_preds, pred_bboxes = [], []
         for i in range(len(feats)):
             norm_query = self.out_norm(feats[i])
-            idx = self.datasets.index(datasets_names[i])
-            class_idxs = norm_query.new_tensor(
-                            self.datasets_cls_idxs[idx]).long()
+            class_idxs = norm_query.new_tensor(self.datasets_cls_idxs[0]).long()
             cls_preds.append(self.outs_cls(norm_query)[:, class_idxs])
             pred_bbox = self.out_bboxes(norm_query)
-            if not self.angles[idx]:
-                pred_bbox = pred_bbox[:, :6]
+
+            pred_bbox = pred_bbox[:, :6]
             pred_bbox = _bbox_pred_to_bbox(sp_centers[i], pred_bbox)
             pred_bboxes.append(pred_bbox)
 
         return cls_preds, pred_bboxes
 
-    def forward(self, x, sp_centers, datasets_names):
+    def forward(self, x, sp_centers):
         """Forward pass.
         
         Args:
@@ -209,22 +209,18 @@ class UniDet3DEncoder(BaseModule):
             sp_centers (List[Tensor]): A list of spatial centers 
                 for the superpoints, with a length of `batch_size`. 
                 Each tensor has a shape of (n_bboxes_i, 3).
-            datasets_names (List[str]): A list of dataset names 
-                corresponding to each input feature tensor.
         Returns:
             Dict: with cls_preds, pred_bboxes and aux_outputs.
         """
         cls_preds, pred_bboxes = [], []
         feats = [self.input_proj(y) for y in x]
-        cls_pred, pred_bbox = \
-            self._forward_head(feats, sp_centers, datasets_names)
+        cls_pred, pred_bbox = self._forward_head(feats, sp_centers)
         cls_preds.append(cls_pred)
         pred_bboxes.append(pred_bbox)
         for i in range(self.num_layers):
             feats = self.self_attn_layers[i](feats)
             feats = self.ffn_layers[i](feats)
-            cls_pred, pred_bbox = \
-                self._forward_head(feats, sp_centers, datasets_names)
+            cls_pred, pred_bbox = self._forward_head(feats, sp_centers)
             cls_preds.append(cls_pred)
             pred_bboxes.append(pred_bbox)
         aux_outputs = [
@@ -237,6 +233,7 @@ class UniDet3DEncoder(BaseModule):
             cls_preds=cls_preds[-1],
             bboxes=pred_bboxes[-1],
             aux_outputs=aux_outputs)
+
 
 def _bbox_pred_to_bbox(points, bbox_pred):
     """Transform predicted bbox parameters to bbox.
@@ -272,12 +269,12 @@ def _bbox_pred_to_bbox(points, bbox_pred):
 
     # rotated case: ..., sin(2a)ln(q), cos(2a)ln(q)
     scale = bbox_pred[:, 0] + bbox_pred[:, 1] + \
-        bbox_pred[:, 2] + bbox_pred[:, 3]
+            bbox_pred[:, 2] + bbox_pred[:, 3]
     q = torch.exp(
         torch.sqrt(
             torch.pow(bbox_pred[:, 6], 2) + torch.pow(bbox_pred[:, 7], 2)))
     alpha = 0.5 * torch.atan2(bbox_pred[:, 6], bbox_pred[:, 7])
     return torch.stack(
         (x_center, y_center, z_center, scale / (1 + q), scale /
-            (1 + q) * q, bbox_pred[:, 5] + bbox_pred[:, 4], alpha),
+         (1 + q) * q, bbox_pred[:, 5] + bbox_pred[:, 4], alpha),
         dim=-1)

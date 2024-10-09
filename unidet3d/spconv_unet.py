@@ -116,12 +116,9 @@ class SpConvUNet(nn.Module):
         super().__init__()
         self.return_blocks = return_blocks
         self.num_planes = num_planes
-        if use_sync_bn:
-            norm_fn=functools.partial(
-                        nn.SyncBatchNorm, eps=1e-4, momentum=0.1)
-        else:
-            norm_fn=functools.partial(
-                        nn.BatchNorm1d, eps=1e-4, momentum=0.1)
+
+        norm_fn = functools.partial(nn.BatchNorm1d, eps=1e-4, momentum=0.1)
+
         # process block and norm_fn caller
         if isinstance(block, str):
             area = ['residual', 'vgg', 'asym']

@@ -102,14 +102,3 @@ class IndoorMetric_(BaseMetric):
         for dataset in self.datasets:
             if dataset in lidar_path.split('/'):
                 return dataset
-
-    # def vis_results(self, eval_ann, sinlge_pred_results):
-    #     pts = sinlge_pred_results['points'].numpy()
-    #     pts[:, 3:] *= 127.5
-    #     pts[:, 3:] += 127.5
-    #     show_result_v2(pts, eval_ann['gt_bboxes_3d'].corners,
-    #                 eval_ann['gt_labels_3d'],
-    #                 sinlge_pred_results['bboxes_3d'].corners,
-    #                 sinlge_pred_results['labels_3d'],
-    #                 Path(self.vis_dir) / sinlge_pred_results['dataset'],
-    #                 eval_ann['lidar_idx'])

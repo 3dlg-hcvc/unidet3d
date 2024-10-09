@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from .structures import InstanceData_
 from mmdet3d.registry import MODELS, TASK_UTILS
 
+
 @MODELS.register_module()
 class UniDet3DCriterion:
     """Universal 3D detection criterion.
@@ -19,28 +20,20 @@ class UniDet3DCriterion:
             w/o angle.
         datasets (List[str]): A list of dataset names for each scene 
             in batch.
-        datasets_weights (List[float]): A list of loss weights corresponding 
-            to each dataset in `datasets`.
         topk (List[int]): A list of integer indicating the number 
             of top predictions to consider for each gt bbox 
             when computing losses.
     """
 
-    def __init__(self, matcher, loss_weight, non_object_weight,
-                 iter_matcher, bbox_loss_simple,
-                 datasets, datasets_weights, topk):
+    def __init__(self, matcher, loss_weight, non_object_weight, iter_matcher, bbox_loss_simple, topk):
         self.bbox_loss_simple = MODELS.build(bbox_loss_simple)
-        # self.bbox_loss_rotated = MODELS.build(bbox_loss_rotated)
         self.matcher = TASK_UTILS.build(matcher)
         self.non_object_weight = non_object_weight
         self.loss_weight = loss_weight
         self.iter_matcher = iter_matcher
-        self.datasets = datasets 
-        self.datasets_weights = datasets_weights
         self.topk = topk
 
-    def get_layer_loss(self, aux_outputs, insts, 
-                       datasets_names, indices=None):
+    def get_layer_loss(self, aux_outputs, insts, indices=None):
         """Per-layer auxiliary loss.
 
         Args:
@@ -59,9 +52,6 @@ class UniDet3DCriterion:
                 for the ground truth bounding boxes.
                 - bboxes_3d (DepthInstance3DBoxes): ground truth bounding boxes.
 
-            datasets_names (List[str]): A list of dataset names corresponding 
-                to each sample in the batch.
-
             indices (Optional[List[Tuple[Tensor]]]): Indices for matching 
                 predicted bboxes with ground truth bboxes. If None, 
                 these will be computed internally.
@@ -75,73 +65,54 @@ class UniDet3DCriterion:
         if indices is None:
             indices = []
             for i in range(len(insts)):
-                idx = self.datasets.index(datasets_names[i])
                 pred_instances = InstanceData_(
                     scores=cls_preds[i],
                     bboxes=pred_bboxes[i])
                 gt_instances = InstanceData_(
                     labels=insts[i].labels_3d,
                     query_masks=insts[i].query_masks,
-                    bboxes=torch.cat((insts[i].bboxes_3d.gravity_center, 
+                    bboxes=torch.cat((insts[i].bboxes_3d.gravity_center,
                                       insts[i].bboxes_3d.tensor[:, 3:] if \
-                                      insts[i].bboxes_3d.with_yaw else \
-                                      insts[i].bboxes_3d.tensor[:, 3:6]),
-                                      dim=1))
-                indices.append(self.matcher(pred_instances, gt_instances, 
-                                            self.topk[idx]))
+                                          insts[i].bboxes_3d.with_yaw else \
+                                          insts[i].bboxes_3d.tensor[:, 3:6]),
+                                     dim=1))
+                indices.append(self.matcher(pred_instances, gt_instances, self.topk))
 
         cls_losses = []
-        for dataset_name, cls_pred, inst, (idx_q, idx_gt) in \
-                zip(datasets_names, cls_preds, insts, indices):
+        for cls_pred, inst, (idx_q, idx_gt) in zip(cls_preds, insts, indices):
             num_classes = cls_pred.shape[1] - 1
             cls_target = cls_pred.new_full(
                 (len(cls_pred),), num_classes, dtype=torch.long)
             cls_target[idx_q] = inst.labels_3d[idx_gt]
-            
-            idx = self.datasets.index(dataset_name)
-            weight = self.datasets_weights[idx]
 
-            cls_losses.append(weight * F.cross_entropy(
-                cls_pred, cls_target, cls_pred.new_tensor([1] * num_classes + \
-                                                          [self.non_object_weight])))
+
+            cls_losses.append(F.cross_entropy(cls_pred, cls_target, cls_pred.new_tensor([1] * num_classes + [self.non_object_weight])))
         cls_loss = torch.mean(torch.stack(cls_losses))
 
         bbox_losses = []
-        for dataset_name, bbox, inst, (idx_q, idx_gt) in zip(datasets_names,
-                                                pred_bboxes, insts, indices):
+        for bbox, inst, (idx_q, idx_gt) in zip(pred_bboxes, insts, indices):
             if len(inst) == 0 or len(idx_q) == 0:
                 continue
             pred_bbox = bbox[idx_q]
             tgt_bbox = inst.bboxes_3d[idx_gt]
-            tgt_bbox = torch.cat((tgt_bbox.gravity_center, 
+            tgt_bbox = torch.cat((tgt_bbox.gravity_center,
                                   tgt_bbox.tensor[:, 3:] if \
-                                  tgt_bbox.with_yaw else \
-                                  tgt_bbox.tensor[:, 3:6]),
-                                  dim=1)     
-
-            idx = self.datasets.index(dataset_name)
-            weight = self.datasets_weights[idx]
+                                      tgt_bbox.with_yaw else \
+                                      tgt_bbox.tensor[:, 3:6]),
+                                 dim=1)
 
             assert tgt_bbox.shape[1] == 6
-            # if tgt_bbox.shape[1] == 7: # rotated case
-            #     bbox_losses.append(weight * self.bbox_loss_rotated(
-            #                             _bbox_to_loss(pred_bbox),
-            #                             _bbox_to_loss(tgt_bbox)).mean())
-            # else:
-            bbox_losses.append(weight * self.bbox_loss_simple(
-                                    _bbox_to_loss(pred_bbox),
-                                    _bbox_to_loss(tgt_bbox)).mean())
+
+            bbox_losses.append(self.bbox_loss_simple(_bbox_to_loss(pred_bbox), _bbox_to_loss(tgt_bbox)).mean())
         if len(bbox_losses):
             bbox_loss = torch.stack(bbox_losses).mean()
         else:
             bbox_loss = 0
-        loss = (
-            self.loss_weight[0] * cls_loss +
-            self.loss_weight[1] * bbox_loss)
+        loss = self.loss_weight[0] * cls_loss + self.loss_weight[1] * bbox_loss
 
         return loss
 
-    def __call__(self, pred, insts, datasets_names):
+    def __call__(self, pred, insts):
         """Loss main function.
 
             pred (Dict): A dictionary containing auxiliary outputs, with
@@ -158,23 +129,20 @@ class UniDet3DCriterion:
                 - labels_3d (Tensor): Shape (n_gts_i,), containing the labels 
                 for the ground truth bounding boxes.
                 - bboxes_3d (DepthInstance3DBoxes): ground truth bounding boxes.
-
-            datasets_names (List[str]): A list of dataset names corresponding 
-                to each sample in the batch.
         
         Returns:
             Dict: with instance loss value.
         """
-        loss = self.get_layer_loss(pred, insts, datasets_names)
+        loss = self.get_layer_loss(pred, insts)
 
         if 'aux_outputs' in pred:
             if self.iter_matcher:
                 indices = None
             for aux_outputs in pred['aux_outputs']:
-                loss += self.get_layer_loss(aux_outputs, insts, 
-                                            datasets_names, indices)
+                loss += self.get_layer_loss(aux_outputs, insts, indices)
 
         return {'det_loss': loss}
+
 
 def _bbox_to_loss(bbox):
     """Transform box to the axis-aligned or rotated iou loss format.
@@ -192,9 +160,10 @@ def _bbox_to_loss(bbox):
     # axis-aligned case: x, y, z, w, h, l -> x1, y1, z1, x2, y2, z2
     return torch.stack(
         (bbox[..., 0] - bbox[..., 3] / 2, bbox[..., 1] - bbox[..., 4] / 2,
-            bbox[..., 2] - bbox[..., 5] / 2, bbox[..., 0] + bbox[..., 3] / 2,
-            bbox[..., 1] + bbox[..., 4] / 2, bbox[..., 2] + bbox[..., 5] / 2),
+         bbox[..., 2] - bbox[..., 5] / 2, bbox[..., 0] + bbox[..., 3] / 2,
+         bbox[..., 1] + bbox[..., 4] / 2, bbox[..., 2] + bbox[..., 5] / 2),
         dim=-1)
+
 
 @TASK_UTILS.register_module()
 class QueryClassificationCost:
@@ -203,9 +172,10 @@ class QueryClassificationCost:
     Args:
         weigth (float): Weight of the cost.
     """
+
     def __init__(self, weight):
         self.weight = weight
-    
+
     def __call__(self, pred_instances, gt_instances, **kwargs):
         """Compute match cost.
 
@@ -222,6 +192,7 @@ class QueryClassificationCost:
         cost = -scores[:, gt_instances.labels]
         return cost * self.weight
 
+
 @TASK_UTILS.register_module()
 class BboxCostJointTraining:
     """Regression cost for bounding boxes.
@@ -233,6 +204,7 @@ class BboxCostJointTraining:
         bbox_loss_rotated (dict): Configuration for 
             bounding box loss with angle.
     """
+
     def __init__(self, weight, loss_simple):
         self.weight = weight
         self.loss_simple = MODELS.build(loss_simple)
@@ -252,21 +224,22 @@ class BboxCostJointTraining:
         Returns:
             Tensor: Cost of shape (n_pred_bboxes, n_gt_bboxes).
         """
-        pred_bboxes = pred_instances.bboxes.\
-                        unsqueeze(axis=1).repeat(1, 
-                                                 gt_instances.bboxes.shape[0], 
-                                                 1)
-        gt_bboxes = gt_instances.bboxes.\
-                        unsqueeze(axis=0).repeat(pred_bboxes.shape[0], 
-                                                 1, 1)
-        assert gt_instances.bboxes.shape[1] == pred_instances.bboxes.shape[1]  
-        if gt_instances.bboxes.shape[1] == 7: #rotated case
-            cost = self.loss_rotated(_bbox_to_loss(pred_bboxes), 
-                                    _bbox_to_loss(gt_bboxes))
+        pred_bboxes = pred_instances.bboxes. \
+            unsqueeze(axis=1).repeat(1,
+                                     gt_instances.bboxes.shape[0],
+                                     1)
+        gt_bboxes = gt_instances.bboxes. \
+            unsqueeze(axis=0).repeat(pred_bboxes.shape[0],
+                                     1, 1)
+        assert gt_instances.bboxes.shape[1] == pred_instances.bboxes.shape[1]
+        if gt_instances.bboxes.shape[1] == 7:  # rotated case
+            cost = self.loss_rotated(_bbox_to_loss(pred_bboxes),
+                                     _bbox_to_loss(gt_bboxes))
         else:
-            cost = self.loss_simple(_bbox_to_loss(pred_bboxes), 
+            cost = self.loss_simple(_bbox_to_loss(pred_bboxes),
                                     _bbox_to_loss(gt_bboxes))
         return cost * self.weight
+
 
 @TASK_UTILS.register_module()
 class UniMatcher:
@@ -303,7 +276,7 @@ class UniMatcher:
         n_gts = len(labels)
         if n_gts == 0:
             return labels.new_empty((0,)), labels.new_empty((0,))
-        
+
         cost_values = []
         for cost in self.costs:
             cost_values.append(cost(pred_instances, gt_instances))
@@ -312,8 +285,6 @@ class UniMatcher:
         cost_value = torch.where(
             gt_instances.query_masks.T, cost_value, self.inf)
 
-        values = torch.topk(
-            cost_value, topk + 1, dim=0, sorted=True,
-            largest=False).values[-1:, :]
+        values = torch.topk(cost_value, topk + 1, dim=0, sorted=True, largest=False).values[-1:, :]
         ids = torch.argwhere(cost_value < values)
         return ids[:, 0], ids[:, 1]
