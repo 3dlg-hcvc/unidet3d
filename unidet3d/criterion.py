@@ -5,7 +5,7 @@ from .structures import InstanceData_
 from mmdet3d.registry import MODELS, TASK_UTILS
 
 @MODELS.register_module()
-class UniDet3DCriterion():
+class UniDet3DCriterion:
     """Universal 3D detection criterion.
 
     Args:
@@ -17,8 +17,6 @@ class UniDet3DCriterion():
             matcher for each encoder layer.
         bbox_loss_simple (dict): Configuration for bounding box loss 
             w/o angle.
-        bbox_loss_rotated (dict): Configuration for bounding box loss 
-            with angle.
         datasets (List[str]): A list of dataset names for each scene 
             in batch.
         datasets_weights (List[float]): A list of loss weights corresponding 
@@ -29,10 +27,10 @@ class UniDet3DCriterion():
     """
 
     def __init__(self, matcher, loss_weight, non_object_weight,
-                 iter_matcher, bbox_loss_simple, bbox_loss_rotated,
+                 iter_matcher, bbox_loss_simple,
                  datasets, datasets_weights, topk):
         self.bbox_loss_simple = MODELS.build(bbox_loss_simple)
-        self.bbox_loss_rotated = MODELS.build(bbox_loss_rotated)
+        # self.bbox_loss_rotated = MODELS.build(bbox_loss_rotated)
         self.matcher = TASK_UTILS.build(matcher)
         self.non_object_weight = non_object_weight
         self.loss_weight = loss_weight
@@ -124,14 +122,15 @@ class UniDet3DCriterion():
             idx = self.datasets.index(dataset_name)
             weight = self.datasets_weights[idx]
 
-            if tgt_bbox.shape[1] == 7: # rotated case
-                bbox_losses.append(weight * self.bbox_loss_rotated(
-                                        _bbox_to_loss(pred_bbox), 
-                                        _bbox_to_loss(tgt_bbox)).mean())
-            else:
-                bbox_losses.append(weight * self.bbox_loss_simple(
-                                        _bbox_to_loss(pred_bbox), 
-                                        _bbox_to_loss(tgt_bbox)).mean())
+            assert tgt_bbox.shape[1] == 6
+            # if tgt_bbox.shape[1] == 7: # rotated case
+            #     bbox_losses.append(weight * self.bbox_loss_rotated(
+            #                             _bbox_to_loss(pred_bbox),
+            #                             _bbox_to_loss(tgt_bbox)).mean())
+            # else:
+            bbox_losses.append(weight * self.bbox_loss_simple(
+                                    _bbox_to_loss(pred_bbox),
+                                    _bbox_to_loss(tgt_bbox)).mean())
         if len(bbox_losses):
             bbox_loss = torch.stack(bbox_losses).mean()
         else:
@@ -234,10 +233,10 @@ class BboxCostJointTraining:
         bbox_loss_rotated (dict): Configuration for 
             bounding box loss with angle.
     """
-    def __init__(self, weight, loss_simple, loss_rotated):
+    def __init__(self, weight, loss_simple):
         self.weight = weight
         self.loss_simple = MODELS.build(loss_simple)
-        self.loss_rotated = MODELS.build(loss_rotated)
+        # self.loss_rotated = MODELS.build(loss_rotated)
 
     def __call__(self, pred_instances, gt_instances, **kwargs):
         """Compute match cost.

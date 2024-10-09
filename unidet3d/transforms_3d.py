@@ -4,7 +4,6 @@ import torch
 from torch_scatter import scatter_mean
 from mmcv.transforms import BaseTransform
 from mmdet3d.datasets.transforms import PointSample
-
 from mmdet3d.registry import TRANSFORMS
 
 

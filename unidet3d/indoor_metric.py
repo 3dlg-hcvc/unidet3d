@@ -7,7 +7,6 @@ from mmengine.logging import MMLogger
 from .indoor_eval import indoor_eval
 from mmdet3d.registry import METRICS
 from mmdet3d.structures import get_box_type
-from .show_results import show_result_v2
 from pathlib import Path
 
 @METRICS.register_module()
@@ -80,8 +79,8 @@ class IndoorMetric_(BaseMetric):
             idx = self.datasets.index(sinlge_pred_results['dataset'])
             ann_infos[idx].append(eval_ann)
             pred_results[idx].append(sinlge_pred_results)
-            if self.vis_dir is not None:
-                self.vis_results(eval_ann, sinlge_pred_results)
+            # if self.vis_dir is not None:
+            #     self.vis_results(eval_ann, sinlge_pred_results)
 
         # some checkpoints may not record the key "box_type_3d"
         box_type_3d, box_mode_3d = get_box_type(
@@ -104,13 +103,13 @@ class IndoorMetric_(BaseMetric):
             if dataset in lidar_path.split('/'):
                 return dataset
 
-    def vis_results(self, eval_ann, sinlge_pred_results):
-        pts = sinlge_pred_results['points'].numpy()
-        pts[:, 3:] *= 127.5
-        pts[:, 3:] += 127.5
-        show_result_v2(pts, eval_ann['gt_bboxes_3d'].corners, 
-                    eval_ann['gt_labels_3d'],
-                    sinlge_pred_results['bboxes_3d'].corners, 
-                    sinlge_pred_results['labels_3d'],
-                    Path(self.vis_dir) / sinlge_pred_results['dataset'],
-                    eval_ann['lidar_idx'])
+    # def vis_results(self, eval_ann, sinlge_pred_results):
+    #     pts = sinlge_pred_results['points'].numpy()
+    #     pts[:, 3:] *= 127.5
+    #     pts[:, 3:] += 127.5
+    #     show_result_v2(pts, eval_ann['gt_bboxes_3d'].corners,
+    #                 eval_ann['gt_labels_3d'],
+    #                 sinlge_pred_results['bboxes_3d'].corners,
+    #                 sinlge_pred_results['labels_3d'],
+    #                 Path(self.vis_dir) / sinlge_pred_results['dataset'],
+    #                 eval_ann['lidar_idx'])

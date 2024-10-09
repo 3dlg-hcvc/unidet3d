@@ -65,10 +65,10 @@ model = dict(
                 type='UniDet3DAxisAlignedIoULoss',
                 mode='diou',
                 reduction='none'),
-            bbox_loss_rotated=dict(
-                type='UniDet3DRotatedIoU3DLoss',
-                mode='diou',
-                reduction='none'),
+            # bbox_loss_rotated=dict(
+            #     type='UniDet3DRotatedIoU3DLoss',
+            #     mode='diou',
+            #     reduction='none'),
             matcher=dict(
                 type='UniMatcher',
                 costs=[
@@ -78,11 +78,13 @@ model = dict(
                             loss_simple=dict(
                                 type='UniDet3DAxisAlignedIoULoss',
                                 mode='diou',
-                                reduction='none'),
-                            loss_rotated=dict(
-                                type='UniDet3DRotatedIoU3DLoss',
-                                mode='diou',
-                                reduction='none'))]),
+                                reduction='none')
+                            # loss_rotated=dict(
+                            #     type='UniDet3DRotatedIoU3DLoss',
+                            #     mode='diou',
+                            #     reduction='none'
+                            # )
+                         )]),
             loss_weight=[0.5, 1.0],
             non_object_weight=0.1,
             topk=[6],
@@ -657,49 +659,13 @@ val_dataloader = dict(
                     metainfo=metainfo_scannet,
                     pipeline=test_pipeline_scannet,
                     ignore_index=max_class_scannet,
-                    test_mode=True)] #+ \
-                # [dict(
-                #     type=dataset_type_s3dis,
-                #     data_root=data_root_s3dis,
-                #     ann_file=f's3dis_sp_infos_Area_{test_area}.pkl',
-                #     pipeline=test_pipeline_s3dis,
-                #     test_mode=True,
-                #     data_prefix=data_prefix_s3dis,
-                #     box_type_3d='Depth',
-                #     backend_args=None)] + \
-                # [dict(
-                #     type=dataset_type_multiscan,
-                #     ann_file='multiscan_infos_val.pkl',
-                #     data_prefix=data_prefix_multiscan,
-                #     data_root=data_root_multiscan,
-                #     pipeline=test_pipeline_multiscan,
-                #     test_mode=True)] + \
-                # [dict(
-                #     type=dataset_type_3rscan,
-                #     ann_file='3rscan_infos_val.pkl',
-                #     data_prefix=data_prefix_3rscan,
-                #     data_root=data_root_3rscan,
-                #     pipeline=test_pipeline_3rscan,
-                #     test_mode=True)] + \
-                # [dict(
-                #     type=dataset_type_scannetpp,
-                #     ann_file='scannetpp_infos_val.pkl',
-                #     data_prefix=data_prefix_scannetpp,
-                #     data_root=data_root_scannetpp,
-                #     pipeline=test_pipeline_scannetpp,
-                #     test_mode=True)] + \
-                # [dict(
-                #     type=dataset_type_arkitscenes,
-                #     ann_file='arkitscenes_offline_infos_val.pkl',
-                #     data_prefix=data_prefix_arkitscenes,
-                #     data_root=data_root_arkitscenes,
-                #     pipeline=test_pipeline_arkitscenes,
-                #     test_mode=True)] 
+                    test_mode=True)]
                     ))
 
 test_dataloader = val_dataloader
 
-load_from = 'work_dirs/tmp/oneformer3d_1xb4_scannet.pth'
+# load_from = 'work_dirs/tmp/oneformer3d_1xb4_scannet.pth'
+load_from = None
 
 test_evaluator = dict(type='IndoorMetric_', 
                       datasets=['scannet'],
