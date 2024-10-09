@@ -205,7 +205,6 @@ class UniDet3D(Base3DDetector):
                 - spatial_shape (Tensor): The spatial shape of the sparse tensor,
                 clipped to the minimum spatial shape.
         """
-        assert elastic_points is not None
 
         if elastic_points is None:
             coordinates, features = sparse_collate(
